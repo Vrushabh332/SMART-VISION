@@ -1,0 +1,98 @@
+import cv2
+import numpy as np
+from ultralytics import YOLO
+from gtts import gTTS
+import os
+import time
+
+# Load YOLOv8 model
+model = YOLO('yolov8n.pt')  # Ensure you have this model file or path correct
+
+# Load a video or use a camera (0 for webcam)
+cap = cv2.VideoCapture(0)  # Replace with a video path if needed
+
+# Initialize timer for TTS
+last_announcement_time = 0
+announcement_interval = 8  # Increase interval to 8 seconds
+
+# Define priority objects for speech guidance
+priority_objects = {'person', 'cell phone', 'bottle', 'book'}  # Customize based on needs
+
+def get_direction(x1, x2, frame_width):
+    """Estimate direction based on object's horizontal location in the frame."""
+    center_x = (x1 + x2) / 2
+    if center_x < frame_width / 3:
+        return "to your left"
+    elif center_x > 2 * frame_width / 3:
+        return "to your right"
+    else:
+        return "ahead"
+
+while cap.isOpened():
+    ret, frame = cap.read()
+    if not ret:
+        break
+
+    frame_height, frame_width = frame.shape[:2]
+
+    # YOLOv8 inference
+    results = model(frame)
+
+    # For storing detected object names and their direction to announce in speech
+    detected_objects_info = []
+
+    # Draw bounding boxes and labels
+    for result in results[0].boxes:
+        x1, y1, x2, y2 = map(int, result.xyxy[0])  # Bounding box coordinates
+        conf = result.conf.item()  # Confidence score
+        label = int(result.cls.item())  # Class label (index)
+        label_name = model.names[label]
+
+        # Only process objects in the priority list
+        if label_name in priority_objects:
+            # Approximate distance by bounding box height (rough estimate)
+            distance = "near" if (y2 - y1) > frame_height / 2 else "far"
+
+            # Determine direction
+            direction = get_direction(x1, x2, frame_width)
+
+            # Prepare descriptive info
+            object_info = f"{label_name} {direction}, {distance}"
+            detected_objects_info.append(object_info)
+
+        # Draw the bounding box and label on the frame
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        cv2.putText(frame, f'{label_name} {conf:.2f}', (x1, y1 - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+    # Announce detected objects if the timer interval has passed
+    current_time = time.time()
+    if detected_objects_info and (current_time - last_announcement_time) > announcement_interval:
+        # Create a single speech text for detected objects
+        text_to_speech = "I have detected " + ", ".join(set(detected_objects_info))  # Use 'set' to remove duplicates
+
+        # Delete any existing audio file to avoid conflicts
+        if os.path.exists("output.mp3"):
+            os.remove("output.mp3")
+
+        # Set up gTTS for text-to-speech and save audio
+        tts = gTTS(text=text_to_speech, lang='en')
+        tts.save("output.mp3")
+
+        # Update last announcement time
+        last_announcement_time = current_time
+
+        # Play the audio (OS-dependent)
+        os.system("start output.mp3")  # Windows
+        # os.system("afplay output.mp3")  # macOS
+        # os.system("mpg321 output.mp3")  # Linux
+
+    # Show the frame with detections
+    cv2.imshow("YOLOv8 Detection", frame)
+
+    # Press 'q' to quit
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+cap.release()
+cv2.destroyAllWindows()
